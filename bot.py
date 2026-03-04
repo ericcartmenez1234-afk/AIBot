@@ -5,7 +5,7 @@ import google.generativeai as genai
 import asyncio
 
 # =====================================================
-# ENV
+# ENVIRONMENT
 # =====================================================
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -42,10 +42,22 @@ PERSONALITY = (
 )
 
 # =====================================================
-# SLASH COMMAND
+# SLASH COMMAND (WORKS FOR USER + GUILD INSTALL)
 # =====================================================
 
-@bot.tree.command(name="ai", description="Chat with Julia")
+@bot.tree.command(
+    name="ai",
+    description="Chat with Julia"
+)
+@discord.app_commands.allowed_contexts(
+    guilds=True,
+    dms=True,
+    private_channels=True
+)
+@discord.app_commands.allowed_installs(
+    guilds=True,
+    users=True
+)
 async def ai_command(interaction: discord.Interaction, message: str):
 
     await interaction.response.defer()
@@ -62,13 +74,12 @@ async def ai_command(interaction: discord.Interaction, message: str):
     except Exception as e:
         print("Slash error:", e)
         await interaction.followup.send(
-            "AI failed.",
+            "AI failed to respond.",
             ephemeral=True
         )
 
-
 # =====================================================
-# AI FUNCTION
+# AI FUNCTION (RUNS IN THREAD)
 # =====================================================
 
 def generate_ai_response(user_id, message):
@@ -80,7 +91,12 @@ def generate_ai_response(user_id, message):
 
     context = "\n".join(memory[-MAX_MEMORY:])
 
-    prompt = f"{PERSONALITY}\n{context}\nUser: {message}\nJulia:"
+    prompt = (
+        f"{PERSONALITY}\n"
+        f"{context}\n"
+        f"User: {message}\n"
+        f"Julia:"
+    )
 
     response = model.generate_content(
         {"parts": [{"text": prompt}]}
@@ -98,9 +114,8 @@ def generate_ai_response(user_id, message):
 
     return reply
 
-
 # =====================================================
-# READY
+# READY EVENT (SYNC COMMANDS)
 # =====================================================
 
 @bot.event
@@ -109,13 +124,12 @@ async def on_ready():
 
     try:
         await bot.tree.sync()
-        print("Slash commands synced.")
+        print("Slash commands synced successfully.")
     except Exception as e:
         print("Sync error:", e)
 
-
 # =====================================================
-# MENTIONS + DM SUPPORT
+# MENTIONS + DM AUTO CHAT
 # =====================================================
 
 @bot.event
@@ -124,6 +138,7 @@ async def on_message(message):
     if message.author.bot:
         return
 
+    # Trigger when DM OR bot mentioned
     if message.guild is None or bot.user in message.mentions:
 
         clean = message.content.replace(
@@ -142,9 +157,8 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-
 # =====================================================
-# RUN
+# RUN BOT
 # =====================================================
 
 bot.run(DISCORD_TOKEN)
