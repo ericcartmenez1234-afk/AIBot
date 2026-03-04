@@ -4,7 +4,7 @@ from discord.ext import commands
 import google.generativeai as genai
 
 # =====================================================
-# Environment Variables (Set in Railway)
+# Environment Variables
 # =====================================================
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -23,6 +23,7 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -38,12 +39,12 @@ PERSONALITY = (
     "You remember conversation context."
 )
 
-# Memory storage
+# Memory system
 user_memory = {}
 MAX_MEMORY_LINES = 20
 
 # =====================================================
-# Bot Ready Event (Global Slash Sync)
+# Ready Event (Global Slash Sync)
 # =====================================================
 
 @bot.event
@@ -51,12 +52,10 @@ async def on_ready():
     print(f"Logged in as {bot.user}")
 
     try:
-        # Sync slash commands globally
         synced = await bot.tree.sync(guild=None)
         print(f"Synced {len(synced)} global slash command(s).")
     except Exception as e:
         print("Slash sync error:", e)
-
 
 # =====================================================
 # Slash Command
@@ -73,7 +72,6 @@ async def ai_slash(interaction: discord.Interaction, message: str):
         message
     )
 
-
 # =====================================================
 # Prefix Command
 # =====================================================
@@ -87,20 +85,23 @@ async def chat_prefix(ctx, *, message: str):
         message
     )
 
-
 # =====================================================
-# Mention Handling
+# Message Listener (Servers + DMs + Group Chats + Mentions)
 # =====================================================
 
 @bot.event
 async def on_message(message):
 
+    # Ignore bots (including itself)
     if message.author.bot:
         return
 
-    # If bot is mentioned
-    if bot.user and bot.user.mentioned_in(message):
-        user_input = message.content.replace(f"<@{bot.user.id}>", "").strip()
+    # If message is in DM OR Group DM OR Server
+    if message.guild is None or bot.user in message.mentions:
+
+        user_input = message.content.replace(
+            f"<@{bot.user.id}>", ""
+        ).strip()
 
         if user_input:
             await handle_message(
@@ -111,9 +112,8 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-
 # =====================================================
-# Core AI Function
+# AI Core
 # =====================================================
 
 async def handle_message(user_id, channel, user_input):
@@ -141,7 +141,6 @@ async def handle_message(user_id, channel, user_input):
 
         await channel.send(bot_response)
 
-        # Store memory
         memory.append(f"User: {user_input}")
         memory.append(f"Julia: {bot_response}")
 
