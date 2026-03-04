@@ -4,7 +4,7 @@ from discord.ext import commands
 import google.generativeai as genai
 
 # ==============================
-# Environment Variables (Railway)
+# Environment Variables
 # ==============================
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -32,11 +32,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 PERSONALITY = (
     "You are Julia. "
-    "You are a confident, witty, snappy woman who speaks naturally. "
-    "You are playful but respectful. "
+    "You are confident, witty, and speak naturally. "
     "You never use emojis. "
-    "You respond like a real person chatting casually. "
-    "You remember context from past messages."
+    "You act like a real person chatting casually. "
+    "You remember conversation context."
 )
 
 # Memory system
@@ -44,26 +43,44 @@ user_memory = {}
 MAX_MEMORY_LINES = 20
 
 # ==============================
-# Bot Events
+# Bot Ready Event
 # ==============================
 
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
 
+    # Sync slash commands globally
+    try:
+        await bot.tree.sync()
+        print("Slash commands synced.")
+    except Exception as e:
+        print("Failed to sync slash commands:", e)
+
+
 # ==============================
-# Commands
+# Slash Command (/ai)
+# ==============================
+
+@bot.tree.command(name="ai", description="Chat with Julia AI")
+async def ai_slash(interaction: discord.Interaction, message: str):
+
+    await interaction.response.defer()
+
+    await handle_message(
+        interaction.user.id,
+        interaction.channel,
+        message
+    )
+
+
+# ==============================
+# Prefix Command (!chat)
 # ==============================
 
 @bot.command(name="chat")
-async def chat(ctx, *, user_input: str):
-    await handle_message(ctx.author.id, ctx.channel, user_input)
-
-
-@bot.command(name="ai")
-async def ai(ctx, *, user_input: str):
-    """Global AI command"""
-    await handle_message(ctx.author.id, ctx.channel, user_input)
+async def chat_prefix(ctx, *, message: str):
+    await handle_message(ctx.author.id, ctx.channel, message)
 
 
 # ==============================
@@ -72,20 +89,24 @@ async def ai(ctx, *, user_input: str):
 
 @bot.event
 async def on_message(message):
+
     if message.author.bot:
         return
 
-    # If bot is mentioned
     if bot.user and bot.user.mentioned_in(message):
         user_input = message.content.replace(f"<@{bot.user.id}>", "").strip()
         if user_input:
-            await handle_message(message.author.id, message.channel, user_input)
+            await handle_message(
+                message.author.id,
+                message.channel,
+                user_input
+            )
 
     await bot.process_commands(message)
 
 
 # ==============================
-# Core AI Function
+# Core AI Logic
 # ==============================
 
 async def handle_message(user_id, channel, user_input):
@@ -115,8 +136,8 @@ async def handle_message(user_id, channel, user_input):
             user_memory[user_id] = memory[-MAX_MEMORY_LINES:]
 
     except Exception as e:
-        print("Gemini API Error:", e)
-        await channel.send("Sorry, something went wrong.")
+        print("Gemini Error:", e)
+        await channel.send("Something went wrong.")
 
 # ==============================
 # Run Bot
