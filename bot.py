@@ -23,6 +23,7 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -61,7 +62,7 @@ async def ai_command(interaction: discord.Interaction, message: str):
     )
 
 # =====================================================
-# Bot Ready — Global Slash Sync
+# Ready Event — Force Proper Sync
 # =====================================================
 
 @bot.event
@@ -69,14 +70,20 @@ async def on_ready():
     print(f"Logged in as {bot.user}")
 
     try:
-        # Sync globally so it appears in all servers + DMs
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} slash command(s) globally.")
+        # Clear old commands just in case
+        bot.tree.clear_commands(guild=None)
+
+        # Sync globally (works in servers + DMs)
+        await bot.tree.sync()
+
+        print("Slash commands synced globally.")
     except Exception as e:
         print("Slash sync error:", e)
 
+    print("Bot is fully ready.")
+
 # =====================================================
-# Message Listener (Mentions + DMs Support)
+# Message Listener (Mentions + Optional Prefix + DMs)
 # =====================================================
 
 @bot.event
@@ -85,11 +92,12 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # If in DM OR bot is mentioned in a server
+    # If DM OR bot mentioned
     if message.guild is None or bot.user in message.mentions:
 
         user_input = message.content.replace(
-            f"<@{bot.user.id}>", ""
+            f"<@{bot.user.id}>",
+            ""
         ).strip()
 
         if user_input:
@@ -130,7 +138,7 @@ async def handle_message(user_id, channel, user_input):
 
         await channel.send(bot_response)
 
-        # Store memory
+        # Save memory
         memory.append(f"User: {user_input}")
         memory.append(f"Julia: {bot_response}")
 
