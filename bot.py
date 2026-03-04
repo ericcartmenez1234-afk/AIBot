@@ -48,20 +48,27 @@ PERSONALITY = (
 @bot.tree.command(name="ai", description="Chat with Julia")
 async def ai_command(interaction: discord.Interaction, message: str):
 
-    await interaction.response.defer()  # prevent timeout
+    await interaction.response.defer()
 
     try:
-        reply = await asyncio.to_thread(generate_ai_response, interaction.user.id, message)
+        reply = await asyncio.to_thread(
+            generate_ai_response,
+            interaction.user.id,
+            message
+        )
 
         await interaction.followup.send(reply)
 
     except Exception as e:
         print("Slash error:", e)
-        await interaction.followup.send("AI failed.", ephemeral=True)
+        await interaction.followup.send(
+            "AI failed.",
+            ephemeral=True
+        )
 
 
 # =====================================================
-# AI FUNCTION (RUNS IN THREAD)
+# AI FUNCTION
 # =====================================================
 
 def generate_ai_response(user_id, message):
@@ -70,6 +77,7 @@ def generate_ai_response(user_id, message):
         user_memory[user_id] = []
 
     memory = user_memory[user_id]
+
     context = "\n".join(memory[-MAX_MEMORY:])
 
     prompt = f"{PERSONALITY}\n{context}\nUser: {message}\nJulia:"
@@ -80,13 +88,15 @@ def generate_ai_response(user_id, message):
 
     reply = response.text if response.text else "..."
 
+    reply = reply[:2000]
+
     memory.append(f"User: {message}")
     memory.append(f"Julia: {reply}")
 
     if len(memory) > MAX_MEMORY:
         user_memory[user_id] = memory[-MAX_MEMORY:]
 
-    return reply[:2000]
+    return reply
 
 
 # =====================================================
