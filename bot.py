@@ -4,7 +4,7 @@ from discord.ext import commands
 import google.generativeai as genai
 
 # =====================================================
-# Environment Variables
+# Environment Variables (Railway)
 # =====================================================
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -23,7 +23,6 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -39,30 +38,19 @@ PERSONALITY = (
     "You remember conversation context."
 )
 
-# Memory system
+# Memory storage
 user_memory = {}
-MAX_MEMORY_LINES = 20
+MAX_MEMORY_LINES = 25
 
 # =====================================================
-# Ready Event (Global Slash Sync)
+# Slash Command (Works Everywhere — Servers + DMs)
 # =====================================================
 
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user}")
-
-    try:
-        synced = await bot.tree.sync(guild=None)
-        print(f"Synced {len(synced)} global slash command(s).")
-    except Exception as e:
-        print("Slash sync error:", e)
-
-# =====================================================
-# Slash Command
-# =====================================================
-
-@bot.tree.command(name="ai", description="Chat with Julia AI")
-async def ai_slash(interaction: discord.Interaction, message: str):
+@bot.tree.command(
+    name="ai",
+    description="Chat with Julia AI anywhere"
+)
+async def ai_command(interaction: discord.Interaction, message: str):
 
     await interaction.response.defer()
 
@@ -73,30 +61,31 @@ async def ai_slash(interaction: discord.Interaction, message: str):
     )
 
 # =====================================================
-# Prefix Command
+# Bot Ready — Global Slash Sync
 # =====================================================
 
-@bot.command(name="chat")
-async def chat_prefix(ctx, *, message: str):
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}")
 
-    await handle_message(
-        ctx.author.id,
-        ctx.channel,
-        message
-    )
+    try:
+        # Sync globally so it appears in all servers + DMs
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} slash command(s) globally.")
+    except Exception as e:
+        print("Slash sync error:", e)
 
 # =====================================================
-# Message Listener (Servers + DMs + Group Chats + Mentions)
+# Message Listener (Mentions + DMs Support)
 # =====================================================
 
 @bot.event
 async def on_message(message):
 
-    # Ignore bots (including itself)
     if message.author.bot:
         return
 
-    # If message is in DM OR Group DM OR Server
+    # If in DM OR bot is mentioned in a server
     if message.guild is None or bot.user in message.mentions:
 
         user_input = message.content.replace(
@@ -113,7 +102,7 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # =====================================================
-# AI Core
+# AI Core Logic
 # =====================================================
 
 async def handle_message(user_id, channel, user_input):
@@ -141,6 +130,7 @@ async def handle_message(user_id, channel, user_input):
 
         await channel.send(bot_response)
 
+        # Store memory
         memory.append(f"User: {user_input}")
         memory.append(f"Julia: {bot_response}")
 
