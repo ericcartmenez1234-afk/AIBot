@@ -1,12 +1,13 @@
 import os
 import discord
 from discord.ext import commands
-import google.generativeai as genai
+from google import genai
 import asyncio
+import time
 
-# ==========================================
+# =====================================================
 # ENVIRONMENT
-# ==========================================
+# =====================================================
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -15,108 +16,140 @@ if not DISCORD_TOKEN or not GEMINI_API_KEY:
     print("Missing environment variables!")
     exit(1)
 
-genai.configure(api_key=GEMINI_API_KEY)
+# =====================================================
+# GEMINI CLIENT (2.x MODELS)
+# =====================================================
 
-# Better free quota model
-model = genai.GenerativeModel("gemini-1.5-flash")
+client = genai.Client(api_key=GEMINI_API_KEY)
 
-# ==========================================
+MODEL = "gemini-2.0-flash"
+
+# =====================================================
 # BOT SETUP
-# ==========================================
+# =====================================================
 
 intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ==========================================
+# =====================================================
 # MEMORY
-# ==========================================
+# =====================================================
 
 user_memory = {}
 MAX_MEMORY = 25
 
-# ==========================================
-# AI SETTINGS
-# ==========================================
-
-AI_COOLDOWN = 2
-ai_lock = asyncio.Lock()
-
 PERSONALITY = (
     "You are Julia. "
-    "You speak casually and confidently like a real human woman. "
-    "You are funny, snappy, chaotic, but still friendly. "
-    "You keep sentences short but expressive. "
-    "You remember previous conversation messages."
+    "You speak naturally and confidently. "
+    "You act like a real human chatting casually. "
+    "You remember conversation history. "
+    "You are extremely funny, chaotic, and witty. "
+    "Keep responses short and punchy."
 )
 
-# ==========================================
-# AI GENERATION
-# ==========================================
+# =====================================================
+# RATE CONTROL
+# =====================================================
 
-async def generate_ai_response(user_id, message):
+last_request_time = 0
+cooldown = 2
 
-    async with ai_lock:
+def adaptive_wait():
+    global last_request_time, cooldown
 
-        while True:
+    now = time.time()
+    diff = now - last_request_time
 
-            try:
+    if diff < cooldown:
+        time.sleep(cooldown - diff)
 
-                if user_id not in user_memory:
-                    user_memory[user_id] = []
+    last_request_time = time.time()
 
-                memory = user_memory[user_id]
+# =====================================================
+# AI FUNCTION
+# =====================================================
 
-                context = "\n".join(memory[-MAX_MEMORY:])
+def generate_ai_response(user_id, message):
 
-                prompt = (
-                    f"{PERSONALITY}\n"
-                    f"{context}\n"
-                    f"User: {message}\n"
-                    f"Julia:"
-                )
+    adaptive_wait()
 
-                response = model.generate_content(
-                    {"parts": [{"text": prompt}]}
-                )
+    if user_id not in user_memory:
+        user_memory[user_id] = []
 
-                reply = response.text if response.text else "..."
+    memory = user_memory[user_id]
 
-                reply = reply[:2000]
+    context = "\n".join(memory[-MAX_MEMORY:])
 
-                memory.append(f"User: {message}")
-                memory.append(f"Julia: {reply}")
+    prompt = f"""
+{PERSONALITY}
 
-                if len(memory) > MAX_MEMORY:
-                    user_memory[user_id] = memory[-MAX_MEMORY:]
+Conversation history:
+{context}
 
-                await asyncio.sleep(AI_COOLDOWN)
+User: {message}
+Julia:
+"""
 
-                return reply
+    try:
 
-            except Exception as e:
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=prompt
+        )
 
-                error = str(e)
+        reply = response.text
 
-                if "429" in error or "quota" in error.lower():
+    except Exception as e:
+        print("Gemini error:", e)
+        return "My brain hit the API limit for a second. Try again in a moment."
 
-                    print("Rate limit hit. Waiting 20 seconds...")
-                    await asyncio.sleep(20)
+    reply = reply[:2000]
 
-                else:
+    memory.append(f"User: {message}")
+    memory.append(f"Julia: {reply}")
 
-                    print("Gemini error:", e)
-                    return "My brain just crashed for a second."
+    if len(memory) > MAX_MEMORY:
+        user_memory[user_id] = memory[-MAX_MEMORY:]
 
-# ==========================================
+    return reply
+
+
+# =====================================================
+# MESSAGE BATCHING (ANTI SPAM)
+# =====================================================
+
+user_queues = {}
+QUEUE_DELAY = 2
+
+
+async def process_queue(user_id, channel):
+
+    await asyncio.sleep(QUEUE_DELAY)
+
+    messages = user_queues.get(user_id, [])
+    if not messages:
+        return
+
+    combined = "\n".join(messages)
+
+    user_queues[user_id] = []
+
+    reply = await asyncio.to_thread(
+        generate_ai_response,
+        user_id,
+        combined
+    )
+
+    await channel.send(reply)
+
+
+# =====================================================
 # SLASH COMMAND
-# ==========================================
+# =====================================================
 
-@bot.tree.command(
-    name="ai",
-    description="Chat with Julia"
-)
+@bot.tree.command(name="ai", description="Chat with Julia")
 @discord.app_commands.allowed_contexts(
     guilds=True,
     dms=True,
@@ -130,41 +163,18 @@ async def ai_command(interaction: discord.Interaction, message: str):
 
     await interaction.response.defer()
 
-    try:
-
-        reply = await generate_ai_response(
-            interaction.user.id,
-            message
-        )
-
-        await interaction.followup.send(reply)
-
-    except Exception as e:
-
-        print("Slash error:", e)
-
-        await interaction.followup.send(
-            "Julia's brain froze for a moment.",
-            ephemeral=True
-        )
-
-# ==========================================
-# !CHAT COMMAND
-# ==========================================
-
-@bot.command()
-async def chat(ctx, *, message: str):
-
-    reply = await generate_ai_response(
-        ctx.author.id,
+    reply = await asyncio.to_thread(
+        generate_ai_response,
+        interaction.user.id,
         message
     )
 
-    await ctx.send(reply)
+    await interaction.followup.send(reply)
 
-# ==========================================
+
+# =====================================================
 # READY EVENT
-# ==========================================
+# =====================================================
 
 @bot.event
 async def on_ready():
@@ -172,17 +182,15 @@ async def on_ready():
     print(f"Logged in as {bot.user}")
 
     try:
-
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} slash commands.")
-
     except Exception as e:
-
         print("Sync error:", e)
 
-# ==========================================
-# MENTION + DM CHAT
-# ==========================================
+
+# =====================================================
+# AUTO CHAT (MENTIONS + DM)
+# =====================================================
 
 @bot.event
 async def on_message(message):
@@ -190,41 +198,33 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # Respond in DMs
-    if message.guild is None:
-
-        reply = await generate_ai_response(
-            message.author.id,
-            message.content
-        )
-
-        await message.channel.send(reply)
-
-        return
-
-    # Respond when mentioned
-    if bot.user in message.mentions:
+    if message.guild is None or bot.user in message.mentions:
 
         clean = message.content.replace(
             f"<@{bot.user.id}>",
             ""
         ).strip()
 
-        if clean:
+        if not clean:
+            return
 
-            reply = await generate_ai_response(
-                message.author.id,
-                clean
+        uid = message.author.id
+
+        if uid not in user_queues:
+            user_queues[uid] = []
+
+        user_queues[uid].append(clean)
+
+        if len(user_queues[uid]) == 1:
+            asyncio.create_task(
+                process_queue(uid, message.channel)
             )
-
-            await message.channel.send(reply)
 
     await bot.process_commands(message)
 
-# ==========================================
+
+# =====================================================
 # RUN BOT
-# ==========================================
+# =====================================================
 
 bot.run(DISCORD_TOKEN)
-bot.run(DISCORD_TOKEN)
-
