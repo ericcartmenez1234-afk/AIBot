@@ -4,6 +4,7 @@ from discord.ext import commands
 from google import genai
 import asyncio
 import time
+from collections import defaultdict
 
 # =====================================================
 # ENVIRONMENT
@@ -17,11 +18,10 @@ if not DISCORD_TOKEN or not GEMINI_API_KEY:
     exit(1)
 
 # =====================================================
-# GEMINI CLIENT (2.x MODELS)
+# GEMINI (2.0 SDK)
 # =====================================================
 
 client = genai.Client(api_key=GEMINI_API_KEY)
-
 MODEL = "gemini-2.0-flash"
 
 # =====================================================
@@ -42,38 +42,59 @@ MAX_MEMORY = 25
 
 PERSONALITY = (
     "You are Julia. "
-    "You speak naturally and confidently. "
-    "You act like a real human chatting casually. "
-    "You remember conversation history. "
-    "You are extremely funny, chaotic, and witty. "
+    "You speak naturally, confidently, and casually. "
+    "You are funny, witty, chaotic but smart. "
     "Keep responses short and punchy."
 )
 
 # =====================================================
-# RATE CONTROL
+# RATE LIMIT SYSTEM
 # =====================================================
 
-last_request_time = 0
-cooldown = 2
+global_last_request = 0
+GLOBAL_COOLDOWN = 3
 
-def adaptive_wait():
-    global last_request_time, cooldown
+user_cooldowns = defaultdict(float)
+
+response_cache = {}
+CACHE_LIMIT = 100
+
+# =====================================================
+# RATE CONTROL + CACHE
+# =====================================================
+
+def enforce_limits(user_id, prompt):
+
+    global global_last_request
 
     now = time.time()
-    diff = now - last_request_time
 
-    if diff < cooldown:
-        time.sleep(cooldown - diff)
+    # ---- Global cooldown ----
+    diff = now - global_last_request
+    if diff < GLOBAL_COOLDOWN:
+        time.sleep(GLOBAL_COOLDOWN - diff)
 
-    last_request_time = time.time()
+    global_last_request = time.time()
+
+    # ---- Per-user cooldown ----
+    last_user = user_cooldowns[user_id]
+    if now - last_user < 5:
+        time.sleep(5 - (now - last_user))
+
+    user_cooldowns[user_id] = time.time()
+
+    # ---- Cache ----
+    if prompt in response_cache:
+        return response_cache[prompt]
+
+    return None
+
 
 # =====================================================
 # AI FUNCTION
 # =====================================================
 
 def generate_ai_response(user_id, message):
-
-    adaptive_wait()
 
     if user_id not in user_memory:
         user_memory[user_id] = []
@@ -85,28 +106,57 @@ def generate_ai_response(user_id, message):
     prompt = f"""
 {PERSONALITY}
 
-Conversation history:
+Conversation:
 {context}
 
 User: {message}
 Julia:
 """
 
-    try:
+    cached = enforce_limits(user_id, prompt)
+    if cached:
+        return cached
 
+    try:
         response = client.models.generate_content(
             model=MODEL,
-            contents=prompt
+            contents=prompt,
         )
 
-        reply = response.text
+        reply = response.text or "..."
 
     except Exception as e:
-        print("Gemini error:", e)
-        return "My brain hit the API limit for a second. Try again in a moment."
+
+        error_text = str(e)
+
+        # Auto retry on rate limit
+        if "429" in error_text:
+            print("Rate limited — retrying after delay...")
+            time.sleep(10)
+
+            try:
+                response = client.models.generate_content(
+                    model=MODEL,
+                    contents=prompt,
+                )
+                reply = response.text or "..."
+
+            except Exception:
+                return "My brain hit a temporary API limit."
+
+        else:
+            print("Gemini error:", e)
+            return "My brain crashed."
 
     reply = reply[:2000]
 
+    # ---- Cache store ----
+    response_cache[prompt] = reply
+
+    if len(response_cache) > CACHE_LIMIT:
+        response_cache.clear()
+
+    # ---- Memory store ----
     memory.append(f"User: {message}")
     memory.append(f"Julia: {reply}")
 
@@ -114,35 +164,6 @@ Julia:
         user_memory[user_id] = memory[-MAX_MEMORY:]
 
     return reply
-
-
-# =====================================================
-# MESSAGE BATCHING (ANTI SPAM)
-# =====================================================
-
-user_queues = {}
-QUEUE_DELAY = 2
-
-
-async def process_queue(user_id, channel):
-
-    await asyncio.sleep(QUEUE_DELAY)
-
-    messages = user_queues.get(user_id, [])
-    if not messages:
-        return
-
-    combined = "\n".join(messages)
-
-    user_queues[user_id] = []
-
-    reply = await asyncio.to_thread(
-        generate_ai_response,
-        user_id,
-        combined
-    )
-
-    await channel.send(reply)
 
 
 # =====================================================
@@ -173,23 +194,7 @@ async def ai_command(interaction: discord.Interaction, message: str):
 
 
 # =====================================================
-# READY EVENT
-# =====================================================
-
-@bot.event
-async def on_ready():
-
-    print(f"Logged in as {bot.user}")
-
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} slash commands.")
-    except Exception as e:
-        print("Sync error:", e)
-
-
-# =====================================================
-# AUTO CHAT (MENTIONS + DM)
+# AUTO RESPOND TO MENTIONS + DM
 # =====================================================
 
 @bot.event
@@ -208,23 +213,34 @@ async def on_message(message):
         if not clean:
             return
 
-        uid = message.author.id
+        reply = await asyncio.to_thread(
+            generate_ai_response,
+            message.author.id,
+            clean
+        )
 
-        if uid not in user_queues:
-            user_queues[uid] = []
-
-        user_queues[uid].append(clean)
-
-        if len(user_queues[uid]) == 1:
-            asyncio.create_task(
-                process_queue(uid, message.channel)
-            )
+        await message.channel.send(reply)
 
     await bot.process_commands(message)
 
 
 # =====================================================
-# RUN BOT
+# READY
+# =====================================================
+
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}")
+
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} slash commands.")
+    except Exception as e:
+        print("Sync error:", e)
+
+
+# =====================================================
+# RUN
 # =====================================================
 
 bot.run(DISCORD_TOKEN)
