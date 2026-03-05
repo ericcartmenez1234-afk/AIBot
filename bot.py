@@ -44,46 +44,75 @@ PERSONALITY = (
 )
 
 # =====================================================
-# AI FUNCTION
+# RATE LIMIT (PREVENT GEMINI QUOTA ERROR)
 # =====================================================
 
-def generate_ai_response(user_id, message):
-
-    if user_id not in user_memory:
-        user_memory[user_id] = []
-
-    memory = user_memory[user_id]
-
-    context = "\n".join(memory[-MAX_MEMORY:])
-
-    prompt = (
-        f"{PERSONALITY}\n"
-        f"{context}\n"
-        f"User: {message}\n"
-        f"Julia:"
-    )
-
-    response = model.generate_content(
-        {"parts": [{"text": prompt}]}
-    )
-
-    reply = response.text if response.text else "..."
-
-    reply = reply[:2000]
-
-    memory.append(f"User: {message}")
-    memory.append(f"Julia: {reply}")
-
-    if len(memory) > MAX_MEMORY:
-        user_memory[user_id] = memory[-MAX_MEMORY:]
-
-    return reply
+AI_COOLDOWN = 3
+last_ai_time = 0
+ai_lock = asyncio.Lock()
 
 # =====================================================
-# SLASH COMMAND
+# AI RESPONSE FUNCTION
 # =====================================================
 
-@bot.tree.command(name="ai", description="Chat with Julia")
+async def generate_ai_response(user_id, message):
+
+    global last_ai_time
+
+    async with ai_lock:
+
+        now = asyncio.get_event_loop().time()
+        wait_time = AI_COOLDOWN - (now - last_ai_time)
+
+        if wait_time > 0:
+            await asyncio.sleep(wait_time)
+
+        last_ai_time = asyncio.get_event_loop().time()
+
+        try:
+
+            if user_id not in user_memory:
+                user_memory[user_id] = []
+
+            memory = user_memory[user_id]
+
+            context = "\n".join(memory[-MAX_MEMORY:])
+
+            prompt = (
+                f"{PERSONALITY}\n"
+                f"{context}\n"
+                f"User: {message}\n"
+                f"Julia:"
+            )
+
+            response = model.generate_content(
+                {"parts": [{"text": prompt}]}
+            )
+
+            reply = response.text if response.text else "..."
+
+            reply = reply[:2000]
+
+            memory.append(f"User: {message}")
+            memory.append(f"Julia: {reply}")
+
+            if len(memory) > MAX_MEMORY:
+                user_memory[user_id] = memory[-MAX_MEMORY:]
+
+            return reply
+
+        except Exception as e:
+            print("Gemini error:", e)
+            return "Give me a second, my brain just hit the API limit."
+
+# =====================================================
+# SLASH COMMAND (WORKS EVERYWHERE)
+# =====================================================
+
+@bot.tree.command(
+    name="ai",
+    description="Chat with Julia"
+)
 @discord.app_commands.allowed_contexts(
     guilds=True,
     dms=True,
@@ -98,8 +127,8 @@ async def ai_command(interaction: discord.Interaction, message: str):
     await interaction.response.defer()
 
     try:
-        reply = await asyncio.to_thread(
-            generate_ai_response,
+
+        reply = await generate_ai_response(
             interaction.user.id,
             message
         )
@@ -107,26 +136,13 @@ async def ai_command(interaction: discord.Interaction, message: str):
         await interaction.followup.send(reply)
 
     except Exception as e:
+
         print("Slash error:", e)
+
         await interaction.followup.send(
-            "AI failed to respond.",
+            "Julia broke for a second.",
             ephemeral=True
         )
-
-# =====================================================
-# PREFIX COMMAND (!chat)
-# =====================================================
-
-@bot.command(name="chat")
-async def chat(ctx, *, message: str):
-
-    reply = await asyncio.to_thread(
-        generate_ai_response,
-        ctx.author.id,
-        message
-    )
-
-    await ctx.send(reply)
 
 # =====================================================
 # READY EVENT
@@ -144,7 +160,7 @@ async def on_ready():
         print("Sync error:", e)
 
 # =====================================================
-# MENTION + DM AUTO CHAT
+# AUTO CHAT (MENTIONS + DMS)
 # =====================================================
 
 @bot.event
@@ -153,32 +169,29 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # DM auto reply
-    if message.guild is None:
+    try:
 
-        reply = await asyncio.to_thread(
-            generate_ai_response,
-            message.author.id,
-            message.content
-        )
+        # Trigger in DMs or when mentioned
+        if message.guild is None or bot.user in message.mentions:
 
-        await message.channel.send(reply)
+            clean = message.content.replace(
+                f"<@{bot.user.id}>",
+                ""
+            ).strip()
 
-    # Mention reply
-    elif bot.user in message.mentions:
+            if clean:
 
-        clean = message.content.replace(f"<@{bot.user.id}>", "")
-        clean = clean.replace(f"<@!{bot.user.id}>", "").strip()
+                await message.channel.typing()
 
-        if clean:
+                reply = await generate_ai_response(
+                    message.author.id,
+                    clean
+                )
 
-            reply = await asyncio.to_thread(
-                generate_ai_response,
-                message.author.id,
-                clean
-            )
+                await message.channel.send(reply)
 
-            await message.channel.send(reply)
+    except Exception as e:
+        print("Message error:", e)
 
     await bot.process_commands(message)
 
@@ -187,6 +200,3 @@ async def on_message(message):
 # =====================================================
 
 bot.run(DISCORD_TOKEN)
-
-
-
