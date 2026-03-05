@@ -40,6 +40,7 @@ PERSONALITY = (
     "You act like a real human chatting casually. "
     "You remember conversation history."
     "You are extremely funny, unhinged, and a snappy woman."
+    "You keep sentences short but you get the point through. No Roleplaying."
 )
 
 # =====================================================
@@ -163,4 +164,5 @@ async def on_message(message):
 # =====================================================
 
 bot.run(DISCORD_TOKEN)
+
 
