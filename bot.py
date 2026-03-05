@@ -38,50 +38,13 @@ PERSONALITY = (
     "You are Julia. "
     "You speak naturally and confidently. "
     "You act like a real human chatting casually. "
-    "You remember conversation history."
-    "You are extremely funny, unhinged, and a snappy woman."
-    "You keep sentences short but you get the point through. No Roleplaying."
+    "You remember conversation history. "
+    "You are extremely funny, unhinged, and a snappy woman. "
+    "You keep sentences short but you get the point through. No roleplaying."
 )
 
 # =====================================================
-# SLASH COMMAND (WORKS FOR USER + GUILD INSTALL)
-# =====================================================
-
-@bot.tree.command(
-    name="ai",
-    description="Chat with Julia"
-)
-@discord.app_commands.allowed_contexts(
-    guilds=True,
-    dms=True,
-    private_channels=True
-)
-@discord.app_commands.allowed_installs(
-    guilds=True,
-    users=True
-)
-async def ai_command(interaction: discord.Interaction, message: str):
-
-    await interaction.response.defer()
-
-    try:
-        reply = await asyncio.to_thread(
-            generate_ai_response,
-            interaction.user.id,
-            message
-        )
-
-        await interaction.followup.send(reply)
-
-    except Exception as e:
-        print("Slash error:", e)
-        await interaction.followup.send(
-            "AI failed to respond.",
-            ephemeral=True
-        )
-
-# =====================================================
-# AI FUNCTION (RUNS IN THREAD)
+# AI FUNCTION
 # =====================================================
 
 def generate_ai_response(user_id, message):
@@ -117,11 +80,61 @@ def generate_ai_response(user_id, message):
     return reply
 
 # =====================================================
-# READY EVENT (SYNC COMMANDS)
+# SLASH COMMAND
+# =====================================================
+
+@bot.tree.command(name="ai", description="Chat with Julia")
+@discord.app_commands.allowed_contexts(
+    guilds=True,
+    dms=True,
+    private_channels=True
+)
+@discord.app_commands.allowed_installs(
+    guilds=True,
+    users=True
+)
+async def ai_command(interaction: discord.Interaction, message: str):
+
+    await interaction.response.defer()
+
+    try:
+        reply = await asyncio.to_thread(
+            generate_ai_response,
+            interaction.user.id,
+            message
+        )
+
+        await interaction.followup.send(reply)
+
+    except Exception as e:
+        print("Slash error:", e)
+        await interaction.followup.send(
+            "AI failed to respond.",
+            ephemeral=True
+        )
+
+# =====================================================
+# PREFIX COMMAND (!chat)
+# =====================================================
+
+@bot.command(name="chat")
+async def chat(ctx, *, message: str):
+
+    reply = await asyncio.to_thread(
+        generate_ai_response,
+        ctx.author.id,
+        message
+    )
+
+    await ctx.send(reply)
+
+# =====================================================
+# READY EVENT
 # =====================================================
 
 @bot.event
 async def on_ready():
+
     print(f"Logged in as {bot.user}")
 
     try:
@@ -131,7 +144,7 @@ async def on_ready():
         print("Sync error:", e)
 
 # =====================================================
-# MENTIONS + DM AUTO CHAT
+# MENTION + DM AUTO CHAT
 # =====================================================
 
 @bot.event
@@ -140,15 +153,25 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # Trigger when DM OR bot mentioned
-    if message.guild is None or bot.user in message.mentions:
+    # DM auto reply
+    if message.guild is None:
 
-        clean = message.content.replace(
-            f"<@{bot.user.id}>",
-            ""
-        ).strip()
+        reply = await asyncio.to_thread(
+            generate_ai_response,
+            message.author.id,
+            message.content
+        )
+
+        await message.channel.send(reply)
+
+    # Mention reply
+    elif bot.user in message.mentions:
+
+        clean = message.content.replace(f"<@{bot.user.id}>", "")
+        clean = clean.replace(f"<@!{bot.user.id}>", "").strip()
 
         if clean:
+
             reply = await asyncio.to_thread(
                 generate_ai_response,
                 message.author.id,
@@ -164,5 +187,6 @@ async def on_message(message):
 # =====================================================
 
 bot.run(DISCORD_TOKEN)
+
 
 
