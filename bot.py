@@ -4,9 +4,9 @@ from discord.ext import commands
 import google.generativeai as genai
 import asyncio
 
-# =====================================================
+# ==========================================
 # ENVIRONMENT
-# =====================================================
+# ==========================================
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -16,98 +16,102 @@ if not DISCORD_TOKEN or not GEMINI_API_KEY:
     exit(1)
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash")
 
-# =====================================================
+# Better free quota model
+model = genai.GenerativeModel("gemini-1.5-flash")
+
+# ==========================================
 # BOT SETUP
-# =====================================================
+# ==========================================
 
 intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# =====================================================
+# ==========================================
 # MEMORY
-# =====================================================
+# ==========================================
 
 user_memory = {}
 MAX_MEMORY = 25
 
-PERSONALITY = (
-    "You are Julia. "
-    "You speak naturally and confidently. "
-    "You act like a real human chatting casually. "
-    "You remember conversation history. "
-    "You are extremely funny, unhinged, and a snappy woman. "
-    "You keep sentences short but you get the point through. No roleplaying."
-)
+# ==========================================
+# AI SETTINGS
+# ==========================================
 
-# =====================================================
-# RATE LIMIT (PREVENT GEMINI QUOTA ERROR)
-# =====================================================
-
-AI_COOLDOWN = 3
-last_ai_time = 0
+AI_COOLDOWN = 2
 ai_lock = asyncio.Lock()
 
-# =====================================================
-# AI RESPONSE FUNCTION
-# =====================================================
+PERSONALITY = (
+    "You are Julia. "
+    "You speak casually and confidently like a real human woman. "
+    "You are funny, snappy, chaotic, but still friendly. "
+    "You keep sentences short but expressive. "
+    "You remember previous conversation messages."
+)
+
+# ==========================================
+# AI GENERATION
+# ==========================================
 
 async def generate_ai_response(user_id, message):
 
-    global last_ai_time
-
     async with ai_lock:
 
-        now = asyncio.get_event_loop().time()
-        wait_time = AI_COOLDOWN - (now - last_ai_time)
+        while True:
 
-        if wait_time > 0:
-            await asyncio.sleep(wait_time)
+            try:
 
-        last_ai_time = asyncio.get_event_loop().time()
+                if user_id not in user_memory:
+                    user_memory[user_id] = []
 
-        try:
+                memory = user_memory[user_id]
 
-            if user_id not in user_memory:
-                user_memory[user_id] = []
+                context = "\n".join(memory[-MAX_MEMORY:])
 
-            memory = user_memory[user_id]
+                prompt = (
+                    f"{PERSONALITY}\n"
+                    f"{context}\n"
+                    f"User: {message}\n"
+                    f"Julia:"
+                )
 
-            context = "\n".join(memory[-MAX_MEMORY:])
+                response = model.generate_content(
+                    {"parts": [{"text": prompt}]}
+                )
 
-            prompt = (
-                f"{PERSONALITY}\n"
-                f"{context}\n"
-                f"User: {message}\n"
-                f"Julia:"
-            )
+                reply = response.text if response.text else "..."
 
-            response = model.generate_content(
-                {"parts": [{"text": prompt}]}
-            )
+                reply = reply[:2000]
 
-            reply = response.text if response.text else "..."
+                memory.append(f"User: {message}")
+                memory.append(f"Julia: {reply}")
 
-            reply = reply[:2000]
+                if len(memory) > MAX_MEMORY:
+                    user_memory[user_id] = memory[-MAX_MEMORY:]
 
-            memory.append(f"User: {message}")
-            memory.append(f"Julia: {reply}")
+                await asyncio.sleep(AI_COOLDOWN)
 
-            if len(memory) > MAX_MEMORY:
-                user_memory[user_id] = memory[-MAX_MEMORY:]
+                return reply
 
-            return reply
+            except Exception as e:
 
-        except Exception as e:
-            print("Gemini error:", e)
-            return "Give me a second, my brain just hit the API limit."
+                error = str(e)
 
-# =====================================================
-# SLASH COMMAND (WORKS EVERYWHERE)
-# =====================================================
+                if "429" in error or "quota" in error.lower():
+
+                    print("Rate limit hit. Waiting 20 seconds...")
+                    await asyncio.sleep(20)
+
+                else:
+
+                    print("Gemini error:", e)
+                    return "My brain just crashed for a second."
+
+# ==========================================
+# SLASH COMMAND
+# ==========================================
 
 @bot.tree.command(
     name="ai",
@@ -140,13 +144,27 @@ async def ai_command(interaction: discord.Interaction, message: str):
         print("Slash error:", e)
 
         await interaction.followup.send(
-            "Julia broke for a second.",
+            "Julia's brain froze for a moment.",
             ephemeral=True
         )
 
-# =====================================================
+# ==========================================
+# !CHAT COMMAND
+# ==========================================
+
+@bot.command()
+async def chat(ctx, *, message: str):
+
+    reply = await generate_ai_response(
+        ctx.author.id,
+        message
+    )
+
+    await ctx.send(reply)
+
+# ==========================================
 # READY EVENT
-# =====================================================
+# ==========================================
 
 @bot.event
 async def on_ready():
@@ -154,14 +172,17 @@ async def on_ready():
     print(f"Logged in as {bot.user}")
 
     try:
-        await bot.tree.sync()
-        print("Slash commands synced successfully.")
+
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} slash commands.")
+
     except Exception as e:
+
         print("Sync error:", e)
 
-# =====================================================
-# AUTO CHAT (MENTIONS + DMS)
-# =====================================================
+# ==========================================
+# MENTION + DM CHAT
+# ==========================================
 
 @bot.event
 async def on_message(message):
@@ -169,34 +190,41 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    try:
+    # Respond in DMs
+    if message.guild is None:
 
-        # Trigger in DMs or when mentioned
-        if message.guild is None or bot.user in message.mentions:
+        reply = await generate_ai_response(
+            message.author.id,
+            message.content
+        )
 
-            clean = message.content.replace(
-                f"<@{bot.user.id}>",
-                ""
-            ).strip()
+        await message.channel.send(reply)
 
-            if clean:
+        return
 
-                await message.channel.typing()
+    # Respond when mentioned
+    if bot.user in message.mentions:
 
-                reply = await generate_ai_response(
-                    message.author.id,
-                    clean
-                )
+        clean = message.content.replace(
+            f"<@{bot.user.id}>",
+            ""
+        ).strip()
 
-                await message.channel.send(reply)
+        if clean:
 
-    except Exception as e:
-        print("Message error:", e)
+            reply = await generate_ai_response(
+                message.author.id,
+                clean
+            )
+
+            await message.channel.send(reply)
 
     await bot.process_commands(message)
 
-# =====================================================
+# ==========================================
 # RUN BOT
-# =====================================================
+# ==========================================
 
 bot.run(DISCORD_TOKEN)
+bot.run(DISCORD_TOKEN)
+
