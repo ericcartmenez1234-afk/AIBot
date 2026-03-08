@@ -127,26 +127,28 @@ Julia:
 
     except Exception as e:
 
-        error_text = str(e)
+    print("FULL GEMINI ERROR:")
+    print(e)
 
-        # Auto retry on rate limit
-        if "429" in error_text:
-            print("Rate limited — retrying after delay...")
-            time.sleep(10)
+    error_text = str(e)
 
-            try:
-                response = client.models.generate_content(
-                    model=MODEL,
-                    contents=prompt,
-                )
-                reply = response.text or "..."
+    if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
+        print("Rate limited — retrying after delay...")
+        time.sleep(10)
 
-            except Exception:
-                return "My brain hit a temporary API limit."
+        try:
+            response = client.models.generate_content(
+                model=MODEL,
+                contents=prompt,
+            )
+            reply = response.text or "..."
 
-        else:
-            print("Gemini error:", e)
-            return "My brain crashed."
+        except Exception as retry_error:
+            print("Retry failed:", retry_error)
+            return "Julia hit the API limit."
+
+    else:
+        return "Julia's brain crashed."
 
     reply = reply[:2000]
 
@@ -244,3 +246,4 @@ async def on_ready():
 # =====================================================
 
 bot.run(DISCORD_TOKEN)
+
