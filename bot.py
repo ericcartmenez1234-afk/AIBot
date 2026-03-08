@@ -64,7 +64,6 @@ CACHE_LIMIT = 100
 # =====================================================
 
 def enforce_limits(user_id, prompt):
-
     global global_last_request
 
     now = time.time()
@@ -127,28 +126,28 @@ Julia:
 
     except Exception as e:
 
-    print("FULL GEMINI ERROR:")
-    print(e)
+        print("FULL GEMINI ERROR:")
+        print(e)
 
-    error_text = str(e)
+        error_text = str(e)
 
-    if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
-        print("Rate limited — retrying after delay...")
-        time.sleep(10)
+        if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
+            print("Rate limited — retrying after delay...")
+            time.sleep(10)
 
-        try:
-            response = client.models.generate_content(
-                model=MODEL,
-                contents=prompt,
-            )
-            reply = response.text or "..."
+            try:
+                response = client.models.generate_content(
+                    model=MODEL,
+                    contents=prompt,
+                )
+                reply = response.text or "..."
 
-        except Exception as retry_error:
-            print("Retry failed:", retry_error)
-            return "Julia hit the API limit."
+            except Exception as retry_error:
+                print("Retry failed:", retry_error)
+                return "Julia hit the API limit."
 
-    else:
-        return "Julia's brain crashed."
+        else:
+            return "Julia's brain crashed."
 
     reply = reply[:2000]
 
@@ -246,4 +245,3 @@ async def on_ready():
 # =====================================================
 
 bot.run(DISCORD_TOKEN)
-
