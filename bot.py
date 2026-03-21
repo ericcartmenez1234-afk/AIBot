@@ -1,13 +1,11 @@
 import os
 import discord
 from discord.ext import commands
-from google import genai
+import google.generativeai as genai
 import asyncio
-import time
-from collections import defaultdict
 
 # =====================================================
-# ENVIRONMENT
+# ENV
 # =====================================================
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -17,12 +15,8 @@ if not DISCORD_TOKEN or not GEMINI_API_KEY:
     print("Missing environment variables!")
     exit(1)
 
-# =====================================================
-# GEMINI (2.0 SDK)
-# =====================================================
-
-client = genai.Client(api_key=GEMINI_API_KEY)
-MODEL = "gemini-2.0-flash"
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 # =====================================================
 # BOT SETUP
@@ -42,55 +36,32 @@ MAX_MEMORY = 25
 
 PERSONALITY = (
     "You are Julia. "
-    "You speak naturally, confidently, and casually. "
-    "You are funny, witty, chaotic but smart. "
-    "Keep responses short and punchy."
+    "You speak naturally and confidently. "
+    "You act like a real human chatting casually. "
+    "You remember conversation history."
 )
 
 # =====================================================
-# RATE LIMIT SYSTEM
+# SLASH COMMAND
 # =====================================================
 
-global_last_request = 0
-GLOBAL_COOLDOWN = 3
+@bot.tree.command(name="ai", description="Chat with Julia")
+async def ai_command(interaction: discord.Interaction, message: str):
 
-user_cooldowns = defaultdict(float)
+    await interaction.response.defer()  # prevent timeout
 
-response_cache = {}
-CACHE_LIMIT = 100
+    try:
+        reply = await asyncio.to_thread(generate_ai_response, interaction.user.id, message)
 
-# =====================================================
-# RATE CONTROL + CACHE
-# =====================================================
+        await interaction.followup.send(reply)
 
-def enforce_limits(user_id, prompt):
-    global global_last_request
-
-    now = time.time()
-
-    # ---- Global cooldown ----
-    diff = now - global_last_request
-    if diff < GLOBAL_COOLDOWN:
-        time.sleep(GLOBAL_COOLDOWN - diff)
-
-    global_last_request = time.time()
-
-    # ---- Per-user cooldown ----
-    last_user = user_cooldowns[user_id]
-    if now - last_user < 5:
-        time.sleep(5 - (now - last_user))
-
-    user_cooldowns[user_id] = time.time()
-
-    # ---- Cache ----
-    if prompt in response_cache:
-        return response_cache[prompt]
-
-    return None
+    except Exception as e:
+        print("Slash error:", e)
+        await interaction.followup.send("AI failed.", ephemeral=True)
 
 
 # =====================================================
-# AI FUNCTION
+# AI FUNCTION (RUNS IN THREAD)
 # =====================================================
 
 def generate_ai_response(user_id, message):
@@ -99,103 +70,42 @@ def generate_ai_response(user_id, message):
         user_memory[user_id] = []
 
     memory = user_memory[user_id]
-
     context = "\n".join(memory[-MAX_MEMORY:])
 
-    prompt = f"""
-{PERSONALITY}
+    prompt = f"{PERSONALITY}\n{context}\nUser: {message}\nJulia:"
 
-Conversation:
-{context}
+    response = model.generate_content(
+        {"parts": [{"text": prompt}]}
+    )
 
-User: {message}
-Julia:
-"""
+    reply = response.text if response.text else "..."
 
-    cached = enforce_limits(user_id, prompt)
-    if cached:
-        return cached
-
-    try:
-        response = client.models.generate_content(
-            model=MODEL,
-            contents=prompt,
-        )
-
-        reply = response.text or "..."
-
-    except Exception as e:
-
-        print("FULL GEMINI ERROR:")
-        print(e)
-
-        error_text = str(e)
-
-        if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
-            print("Rate limited — retrying after delay...")
-            time.sleep(10)
-
-            try:
-                response = client.models.generate_content(
-                    model=MODEL,
-                    contents=prompt,
-                )
-                reply = response.text or "..."
-
-            except Exception as retry_error:
-                print("Retry failed:", retry_error)
-                return "Julia hit the API limit."
-
-        else:
-            return "Julia's brain crashed."
-
-    reply = reply[:2000]
-
-    # ---- Cache store ----
-    response_cache[prompt] = reply
-
-    if len(response_cache) > CACHE_LIMIT:
-        response_cache.clear()
-
-    # ---- Memory store ----
     memory.append(f"User: {message}")
     memory.append(f"Julia: {reply}")
 
     if len(memory) > MAX_MEMORY:
         user_memory[user_id] = memory[-MAX_MEMORY:]
 
-    return reply
+    return reply[:2000]
 
 
 # =====================================================
-# SLASH COMMAND
+# READY
 # =====================================================
 
-@bot.tree.command(name="ai", description="Chat with Julia")
-@discord.app_commands.allowed_contexts(
-    guilds=True,
-    dms=True,
-    private_channels=True
-)
-@discord.app_commands.allowed_installs(
-    guilds=True,
-    users=True
-)
-async def ai_command(interaction: discord.Interaction, message: str):
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}")
 
-    await interaction.response.defer()
-
-    reply = await asyncio.to_thread(
-        generate_ai_response,
-        interaction.user.id,
-        message
-    )
-
-    await interaction.followup.send(reply)
+    try:
+        await bot.tree.sync()
+        print("Slash commands synced.")
+    except Exception as e:
+        print("Sync error:", e)
 
 
 # =====================================================
-# AUTO RESPOND TO MENTIONS + DM
+# MENTIONS + DM SUPPORT
 # =====================================================
 
 @bot.event
@@ -211,33 +121,16 @@ async def on_message(message):
             ""
         ).strip()
 
-        if not clean:
-            return
+        if clean:
+            reply = await asyncio.to_thread(
+                generate_ai_response,
+                message.author.id,
+                clean
+            )
 
-        reply = await asyncio.to_thread(
-            generate_ai_response,
-            message.author.id,
-            clean
-        )
-
-        await message.channel.send(reply)
+            await message.channel.send(reply)
 
     await bot.process_commands(message)
-
-
-# =====================================================
-# READY
-# =====================================================
-
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user}")
-
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} slash commands.")
-    except Exception as e:
-        print("Sync error:", e)
 
 
 # =====================================================
